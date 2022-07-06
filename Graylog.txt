@@ -1,0 +1,208 @@
+REQUISITOS
+
+Versão recente do Docker
+
+Graylog
+
+Todos os exemplos de configuração são criados para serem executados no computador local. Caso sejam usados em servidores externos, ajuste GRAYLOG_HTTP_EXTERNAL_URI e adicione GRAYLOG_HTTP_PUBLISH_URI e GRAYLOG_HTTP_EXTERNAL_URI de acordo com a documentação do server.conf.
+
+
+COMO OBTER DADOS DE LOG IN
+Você pode criar diferentes tipos de entradas em Sistema / Entradas. No entanto, você só pode usar portas que foram mapeadas corretamente para o contêiner do Docker, caso contrário, os dados não serão exibidos na interface do usuário do Graylog.
+
+
+docker run --link mongo --link elasticsearch \    
+    -p 9000:9000 -p 12201:12201 -p 1514:1514 -p 5555:5555 \    
+    -e GRAYLOG_HTTP_EXTERNAL_URI="http://127.0.0.1:9000/" \    
+    -d graylog/graylog:<version_number>
+
+
+
+Por exemplo, para iniciar um contêiner Graylog Docker escutando na porta 5555, pare seu contêiner e recrie-o, enquanto anexa -p 5555:5555 ao comando docker run:
+
+Da mesma forma, o mesmo pode ser feito para UDP anexando -p 5555:5555/udp.
+
+Depois de garantir que seu contêiner Graylog Docker esteja escutando em :5555, crie uma entrada Raw/Plaintext navegando até sua porta Graylog, por exemplo. http://localhost:9000/system/inputs
+
+
+Pode se enviar a mensagem de texto simples para a entrada TCP Graylog Raw/Plaintext em execução na porta 5555 usando o seguinte comando:
+
+$ echo 'Primeira mensagem de log
+
+
+$ echo 'First log message' | nc localhost 5555
+
+
+Graylog vem com uma configuração padrão que funciona imediatamente, mas você precisa definir uma senha para o usuário administrador e a interface da web precisa saber como se conectar do seu navegador à API REST Graylog.
+
+Ambas as configurações podem ser configuradas por meio de variáveis de ambiente (consulte também Configuração):
+
+
+-e GRAYLOG_ROOT_PASSWORD_SHA2=8c6976e5b5410415bde908bd4dee15dfb167a9c873fc4bb8a81f6f2ab448a918
+-e GRAYLOG_HTTP_EXTERNAL_URI="http://127.0.0.1:9000/"
+
+
+Neste caso, você pode fazer login no Graylog com o nome de usuário e senha admin.
+
+Gere sua própria senha de administrador com o seguinte comando e coloque o hash SHA-256 na variável GRAYLOG_ROOT_PASSWORD_SHA2environment:
+
+
+echo -n "Enter Password: " && head -1 < /dev/stdin | tr -d '\n' | sha256sum | cut -d " " -f1
+
+
+Todas essas configurações e parâmetros de linha de comando podem ser colocados em um docker-compose.yml
+arquivo, para que eles não precisem ser executados um após o outro.
+
+version: '2'
+services:
+  # MongoDB: https://hub.docker.com/_/mongo/
+  mongodb:
+    image: mongo:3
+  #DB in share for persistence
+    volumes:
+       - /video/graylog/mongodb:/data/db
+  # Elasticsearch: https://www.elastic.co/guide/en/elasticsearch/reference/6.6/docker.html
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch-oss:7.10.2
+    #data folder in share for persistence
+    volumes:
+      - /video/graylog/elasticsearchdata:/usr/share/elasticsearch/data
+    environment:
+      - http.host=0.0.0.0
+      - transport.host=localhost
+      - network.host=0.0.0.0
+      - node.max_local_storage_nodes=4
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+    mem_limit: 1g
+  # Graylog: https://hub.docker.com/r/graylog/graylog/
+  graylog:
+    image: graylog/graylog:<version>
+    #journal and config directories in local NFS share for persistence
+    volumes:
+       - /video/graylog/journal:/usr/share/graylog/data/journal
+       - /video/graylog/config:/usr/share/graylog/data/config
+    environment:
+      # CHANGE ME (must be at least 16 characters)!
+      - GRAYLOG_PASSWORD_SECRET=forpasswordencryption
+      # Password: admin
+      - GRAYLOG_ROOT_PASSWORD_SHA2=8c6976e5b5410415bde908bd4dee15dfb167a9c873fc4bb8a81f6f2ab448a918
+      - GRAYLOG_HTTP_BIND_ADDRESS=0.0.0.0:7555
+      - GRAYLOG_HTTP_EXTERNAL_URI=http://192.168.10.152:7555/
+      - GRAYLOG_TRANSPORT_EMAIL_WEB_INTERFACE_URL=http://192.168.10.152:7555
+      - GRAYLOG_TRANSPORT_EMAIL_HOSTNAME=smtp.example.com
+      - GRAYLOG_TRANSPORT_EMAIL_ENABLED=true
+      - GRAYLOG_TRANSPORT_EMAIL_PORT=25
+      - GRAYLOG_TRANSPORT_EMAIL_USE_AUTH=false
+      - GRAYLOG_TRANSPORT_EMAIL_USE_TLS=false
+      - GRAYLOG_TRANSPORT_EMAIL_USE_SSL=false
+      - GRAYLOG_TRANSPORT_FROM_EMAIL=youremail@yourdomain.com
+      - GRAYLOG_TRANSPORT_SUBJECT_PREFIX=[graylog]
+    links:
+      - mongodb:mongo
+      - elasticsearch
+    depends_on:
+      - mongodb
+      - elasticsearch
+    ports:
+      # Graylog web interface and REST API
+      - 7555:7555
+      # Syslog TCP
+      - 8514:8514
+      # Syslog UDP
+      - 8514:8514/udp
+      # GELF TCP
+      - 12201:12201
+      # GELF UDP
+      - 12201:12201/udp
+
+
+version: '3'
+services:
+    # MongoDB: https://hub.docker.com/_/mongo/
+    mongo:
+      image: mongo:4.2
+      networks:
+        - graylog
+    # Elasticsearch: https://www.elastic.co/guide/en/elasticsearch/reference/7.10/docker.html
+    elasticsearch:
+      image: docker.elastic.co/elasticsearch/elasticsearch-oss:7.10.2
+      environment:
+        - http.host=0.0.0.0
+        - transport.host=localhost
+        - network.host=0.0.0.0
+        - "ES_JAVA_OPTS=-Dlog4j2.formatMsgNoLookups=true -Xms512m -Xmx512m"
+      ulimits:
+        memlock:
+          soft: -1
+          hard: -1
+      deploy:
+        resources:
+          limits:
+            memory: 1g
+      networks:
+        - graylog
+    # Graylog: https://hub.docker.com/r/graylog/graylog/
+    graylog:
+      image: graylog/graylog:4.2
+      environment:
+        # CHANGE ME (must be at least 16 characters)!
+        - GRAYLOG_PASSWORD_SECRET=somepasswordpepper
+        # Password: admin
+        - GRAYLOG_ROOT_PASSWORD_SHA2=8c6976e5b5410415bde908bd4dee15dfb167a9c873fc4bb8a81f6f2ab448a918
+        - GRAYLOG_HTTP_EXTERNAL_URI=http://127.0.0.1:9000/
+      entrypoint: /usr/bin/tini -- wait-for-it elasticsearch:9200 --  /docker-entrypoint.sh
+      networks:
+        - graylog
+      restart: always
+      depends_on:
+        - mongo
+        - elasticsearch
+      ports:
+        # Graylog web interface and REST API
+        - 9000:9000
+        # Syslog TCP
+        - 1514:1514
+        # Syslog UDP
+        - 1514:1514/udp
+        # GELF TCP
+        - 12201:12201
+        # GELF UDP
+        - 12201:12201/udp
+networks:
+    graylog:
+      driver: bridge
+
+
+
+Depois de iniciar todos os três contêineres do Docker executando docker-compose up, você pode abrir a URL http://127.0.0.1:9000 em um navegador da Web e fazer login com o nome de usuário admin e a senha admin (certifique-se de alterar a senha posteriormente). Altere GRAYLOG_HTTP_EXTERNAL_URI=para o IP do seu servidor se você executar o Docker remotamente.
+
+
+
+Every configuration option can be set via environment variables.. Simply prefix the parameter name with GRAYLOG_and put it all in upper case.
+
+
+Por exemplo, configurando a configuração SMTP para enviar notificações de alerta Graylog por e-mail, o docker-compose.yml ficaria assim:
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
